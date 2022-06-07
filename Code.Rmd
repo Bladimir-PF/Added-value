@@ -1,0 +1,77 @@
+---
+title: "Added Value"
+author: "GPF"
+date: '2022-06-06'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(haven)
+library(tidyverse)
+library(ggplot2)
+library(forcats)
+```
+
+```{r}
+data <- read_sav("C:/Users/geral/Downloads/Levantamiento Datos Valor Agregado2 23-05-22.sav")
+```
+
+```{r}
+data <- data%>%
+  mutate_at(c(6:28), ~replace(., is.na(.), 0))
+
+table(data$nivel)
+
+items <- data%>%
+  select(nivel, P1:P23)%>%
+  group_by(nivel)%>%
+  summarise_if(is.numeric, mean, na.rm = T)
+
+items <- items  %>%
+  mutate_if(is.numeric, ~round(., 2))
+
+items$nivel <- as.character(items$nivel)
+
+items["nivel"][items["nivel"] == 1] <- 'Primer'
+items["nivel"][items["nivel"] == 2] <- 'Cuarto'
+
+items <- items%>%
+  rename(Grupo = nivel)
+
+items <- items%>%
+  pivot_longer(P1:P23, names_to = 'Item', values_to = 'Prop_correctas')
+```
+
+
+```{r}
+items$Item <- as.factor(items$Item)
+
+items <- items %>%
+  mutate(Item = fct_relevel(Item,
+                            'P1',	'P2',	'P3',	'P4',	'P5',	'P6',	'P7',	'P8',	'P9',	'P10',	'P11',	'P12',	'P13',	'P14',	'P15',	'P16',	'P17',	'P18',	'P19',	'P20',	'P21',	'P22',	'P23'))
+
+levels(items$Item)
+```
+
+
+```{r}
+ggplot(items, aes(Prop_correctas, Item))+
+  geom_point(aes(color = Grupo))+
+  scale_y_discrete(limits=rev)+
+  theme_bw()
+
+ggplot(items,aes(Prop, reverse(Item, -Prop)))+
+         geom_point()
+  
+         
+  geom_bar(stat ="identity")+
+  scale_x_continuous(labels = scales::comma)+
+  labs(x = "Proportion of Female in Major Category", y = "Major category", title = "Proportion of Females by Major Category ")+
+  geom_vline(xintercept = 0.5, color = "Red", size = 1)
+
+```
+
