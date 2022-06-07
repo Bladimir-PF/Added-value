@@ -3,6 +3,8 @@ title: "Added Value"
 author: "GPF"
 date: '2022-06-06'
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -14,25 +16,40 @@ library(haven)
 library(tidyverse)
 library(ggplot2)
 library(forcats)
+library(expss) # To add variable and value labels, sorting
+library(psych) # To add descriptive summary functions
+library(multcomp) # To do glht linear combinations in GLMs
+library(margins) # To get predicted values like Stata does
+library(MASS) # To fit negative binomial model easily
+library(VGAM)
 ```
 
 ```{r}
-data <- read_sav("C:/Users/geral/Downloads/Levantamiento Datos Valor Agregado2 23-05-22.sav")
+BBDD_or <- read_sav("C:/Users/geral/Downloads/Levantamiento Datos Valor Agregado2 23-05-22.sav")
 ```
 
+
 ```{r}
-data <- data%>%
+data <- BBDD_or%>%
   mutate_at(c(6:28), ~replace(., is.na(.), 0))
 
-table(data$nivel)
-
-items <- data%>%
+means <- BBDD_or%>%
+  mutate_at(c(6:28), ~replace(., is.na(.), 0))%>%
   select(nivel, P1:P23)%>%
   group_by(nivel)%>%
-  summarise_if(is.numeric, mean, na.rm = T)
+  summarise_if(is.numeric, mean, na.rm = T)%>%
+  mutate_if(is.numeric, ~round(., 2))%>%
+  gather(Item, Mean, P1:P23)
 
-items <- items  %>%
-  mutate_if(is.numeric, ~round(., 2))
+sds <- BBDD_or%>%
+  mutate_at(c(6:28), ~replace(., is.na(.), 0))%>%
+  select(nivel, P1:P23)%>%
+  group_by(nivel)%>%
+  summarise_if(is.numeric, sd, na.rm = T)%>%
+  mutate_if(is.numeric, ~round(., 2))%>%
+  gather(Item, SD, P1:P23)
+
+items <- left_join(means, sds, by = c('nivel', 'Item'))
 
 items$nivel <- as.character(items$nivel)
 
@@ -41,9 +58,6 @@ items["nivel"][items["nivel"] == 2] <- 'Cuarto'
 
 items <- items%>%
   rename(Grupo = nivel)
-
-items <- items%>%
-  pivot_longer(P1:P23, names_to = 'Item', values_to = 'Prop_correctas')
 ```
 
 
@@ -57,21 +71,91 @@ items <- items %>%
 levels(items$Item)
 ```
 
+## Graficos
 
 ```{r}
-ggplot(items, aes(Prop_correctas, Item))+
-  geom_point(aes(color = Grupo))+
+ggplot(items, aes(Mean, Item))+
+  geom_point(aes(color = Grupo, shape = Grupo), size = 2.1)+
   scale_y_discrete(limits=rev)+
+  labs(x = 'p-valor', y = 'Item')+
   theme_bw()
 
-ggplot(items,aes(Prop, reverse(Item, -Prop)))+
-         geom_point()
-  
-         
+items%>%
+  filter(Grupo == 'Primer')%>%
+  ggplot(., aes(Mean, Item))+
+  geom_point(size = 2.1, shape = 16, color = 'blue')+
+  geom_errorbar(aes(xmin=Mean-SD, xmax=Mean+SD), width = .4)+
+  theme_classic()+
+  coord_cartesian(xlim = c(0, 1))
+ 
+items%>%
+  filter(Grupo == 'Primer')%>%
+ggplot(.,aes(Mean, Item))+
   geom_bar(stat ="identity")+
+  scale_y_discrete(limits=rev)
+  
+ggplot(items,aes(Mean, Item, fill = Grupo))+
+  geom_bar(position = 'dodge', stat ="identity")+
+  scale_y_discrete(limits=rev)+
   scale_x_continuous(labels = scales::comma)+
-  labs(x = "Proportion of Female in Major Category", y = "Major category", title = "Proportion of Females by Major Category ")+
-  geom_vline(xintercept = 0.5, color = "Red", size = 1)
+  theme_classic()+
+  labs(x = "p-valor", y = "Item")+
+  geom_vline(xintercept = 0.5, color = "Red", size = .5, linetype = 'dashed')
 
+```
+
+## Modelos
+
+```{r}
+data <- data%>%
+  mutate(
+    pvalor = Porc_Respuesta/100,
+    pvalor = round(pvalor,2),
+    Nincorrect = 23 - Buenas
+  )
+
+data%>%
+  dplyr::select(Buenas, Nincorrect)
+
+# Modelo vacio
+
+ModelEmpty = vglm(data=data, binomialff(link="logitlink", multiple.responses=FALSE), formula=cbind(Buenas,Nincorrect)~1) # Can also use multiv format of 0/1
+
+summary(ModelEmpty)
+
+print("Get intercept in probability")
+ModelEmptyProb=1/(1+exp(-1*coefficients(ModelEmpty))); ModelEmptyProb
+
+print("Print ML -2LL, AIC, and BIC that match SAS")
+-2*logLik(ModelEmpty); AIC(ModelEmpty); BIC(ModelEmpty)
+
+print("Pearson Chi-Square / DF Index of Fit matching SAS and STATA")
+sum(residuals(ModelEmpty, type="pearson")^2)/(233)    # SAS N
+sum(residuals(ModelEmpty, type="pearson")^2)/(233-1)  # STATA N-k
+
+# Modelo con predictores
+
+data <- data%>%
+  mutate(
+    basica = ifelse(letra == 1, 1, 0),
+    ciencia = ifelse(letra == 2, 1, 0),
+    historia = ifelse(letra == 3, 1, 0),
+    cuarto_nivel = ifelse(nivel == 2, 1, 0))
+
+print("Parameter SEs do not match SAS and STATA exactly but are close")
+ModelBin = vglm(data=data, binomialff(link="logitlink", multiple.responses=FALSE), formula=cbind(Buenas,Nincorrect)~1+basica+ciencia+historia+cuarto_nivel)
+
+summary(ModelBin)
+
+
+print("Print ML -2LL, AIC, and BIC that match SAS")
+-2*logLik(ModelBin); AIC(ModelBin); BIC(ModelBin)
+print("Pearson Chi-Square / DF Index of Fit matching SAS and STATA")
+sum(residuals(ModelBin, type="pearson")^2)/(233)    # SAS N
+sum(residuals(ModelBin, type="pearson")^2)/(233-5)  # STATA N-k
+
+print("Multiv Wald test of model -- very close to SAS and STATA")
+BinR2 = glht(model=ModelBin, linfct=c('basica=0','ciencia=0','historia=0','cuarto_nivel=0'))
+print(summary(BinR2, test=Chisqtest()), digits="8") # Joint chi-square test 
 ```
 
