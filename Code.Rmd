@@ -27,6 +27,16 @@ library(lme4) # To fit binomial models via random effects
 
 ```{r}
 BBDD_or <- read_sav("C:/Users/geral/Downloads/Levantamiento Datos Valor Agregado2 23-05-22.sav")
+
+t.test(Buenas ~ nivel, data = data)
+
+summary(lm(Buenas ~ as.factor(nivel), data = data))
+
+data%>%
+  group_by(nivel)%>%
+  summarise(
+    me = mean(Buenas)
+  )
 ```
 
 ## Data munging
