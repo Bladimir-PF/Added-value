@@ -12,22 +12,24 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-library(haven)
-library(tidyverse)
-library(ggplot2)
-library(forcats)
+library(haven) # To import SPSS files
+library(tidyverse) # To perform data manipulation
+library(ggplot2) # To plot data
+library(forcats) # To work with factors
 library(expss) # To add variable and value labels, sorting
 library(psych) # To add descriptive summary functions
 library(multcomp) # To do glht linear combinations in GLMs
 library(margins) # To get predicted values like Stata does
 library(MASS) # To fit negative binomial model easily
-library(VGAM)
+library(VGAM) # To fit binomial models
+library(lme4) # To fit binomial models via random effects
 ```
 
 ```{r}
 BBDD_or <- read_sav("C:/Users/geral/Downloads/Levantamiento Datos Valor Agregado2 23-05-22.sav")
 ```
 
+## Data munging
 
 ```{r}
 data <- BBDD_or%>%
@@ -35,7 +37,7 @@ data <- BBDD_or%>%
 
 means <- BBDD_or%>%
   mutate_at(c(6:28), ~replace(., is.na(.), 0))%>%
-  select(nivel, P1:P23)%>%
+  dplyr::select(nivel, P1:P23)%>%
   group_by(nivel)%>%
   summarise_if(is.numeric, mean, na.rm = T)%>%
   mutate_if(is.numeric, ~round(., 2))%>%
@@ -43,7 +45,7 @@ means <- BBDD_or%>%
 
 sds <- BBDD_or%>%
   mutate_at(c(6:28), ~replace(., is.na(.), 0))%>%
-  select(nivel, P1:P23)%>%
+  dplyr::select(nivel, P1:P23)%>%
   group_by(nivel)%>%
   summarise_if(is.numeric, sd, na.rm = T)%>%
   mutate_if(is.numeric, ~round(., 2))%>%
@@ -58,10 +60,7 @@ items["nivel"][items["nivel"] == 2] <- 'Cuarto'
 
 items <- items%>%
   rename(Grupo = nivel)
-```
 
-
-```{r}
 items$Item <- as.factor(items$Item)
 
 items <- items %>%
@@ -69,9 +68,11 @@ items <- items %>%
                             'P1',	'P2',	'P3',	'P4',	'P5',	'P6',	'P7',	'P8',	'P9',	'P10',	'P11',	'P12',	'P13',	'P14',	'P15',	'P16',	'P17',	'P18',	'P19',	'P20',	'P21',	'P22',	'P23'))
 
 levels(items$Item)
+
+rm(BBDD_or, means, sds)
 ```
 
-## Graficos
+## Graphs
 
 ```{r}
 ggplot(items, aes(Mean, Item))+
@@ -104,20 +105,23 @@ ggplot(items,aes(Mean, Item, fill = Grupo))+
 
 ```
 
-## Modelos
+## Models
 
 ```{r}
 data <- data%>%
   mutate(
     pvalor = Porc_Respuesta/100,
     pvalor = round(pvalor,2),
-    Nincorrect = 23 - Buenas
-  )
+    Nincorrect = 23 - Buenas,
+    basica = ifelse(letra == 1, 1, 0),
+    ciencia = ifelse(letra == 2, 1, 0),
+    historia = ifelse(letra == 3, 1, 0),
+    cuarto_nivel = ifelse(nivel == 2, 1, 0))
+```
 
-data%>%
-  dplyr::select(Buenas, Nincorrect)
 
-# Modelo vacio
+```{r}
+# Empty model
 
 ModelEmpty = vglm(data=data, binomialff(link="logitlink", multiple.responses=FALSE), formula=cbind(Buenas,Nincorrect)~1) # Can also use multiv format of 0/1
 
@@ -133,20 +137,12 @@ print("Pearson Chi-Square / DF Index of Fit matching SAS and STATA")
 sum(residuals(ModelEmpty, type="pearson")^2)/(233)    # SAS N
 sum(residuals(ModelEmpty, type="pearson")^2)/(233-1)  # STATA N-k
 
-# Modelo con predictores
-
-data <- data%>%
-  mutate(
-    basica = ifelse(letra == 1, 1, 0),
-    ciencia = ifelse(letra == 2, 1, 0),
-    historia = ifelse(letra == 3, 1, 0),
-    cuarto_nivel = ifelse(nivel == 2, 1, 0))
+# Binomial
 
 print("Parameter SEs do not match SAS and STATA exactly but are close")
 ModelBin = vglm(data=data, binomialff(link="logitlink", multiple.responses=FALSE), formula=cbind(Buenas,Nincorrect)~1+basica+ciencia+historia+cuarto_nivel)
 
 summary(ModelBin)
-
 
 print("Print ML -2LL, AIC, and BIC that match SAS")
 -2*logLik(ModelBin); AIC(ModelBin); BIC(ModelBin)
@@ -156,6 +152,65 @@ sum(residuals(ModelBin, type="pearson")^2)/(233-5)  # STATA N-k
 
 print("Multiv Wald test of model -- very close to SAS and STATA")
 BinR2 = glht(model=ModelBin, linfct=c('basica=0','ciencia=0','historia=0','cuarto_nivel=0'))
-print(summary(BinR2, test=Chisqtest()), digits="8") # Joint chi-square test 
+print(summary(BinR2, test=Chisqtest()), digits="8") # Joint chi-square test
+
+print("Save predicted propcorrect and correlate with actual propcorrect") 
+data$PredModelBin = predict(ModelBin, type="response")
+rPredModelBin = cor.test(data$PredModelBin, data$Buenas, method="pearson")
+print("R2"); rPredModelBin$estimate^2
+
+# Binomial Over-dispersion (additive)
+
+print("Additive Overdispersion via Random Intercept Variance (1|ID)")
+print("Also known as observation-level random effect for overdispersion")
+
+ModelBinAdd <- glmer(data=data, family=binomial(link="logit"), formula=cbind(Buenas,Nincorrect)~1+basica+ciencia+historia+cuarto_nivel+(1|numero))
+
+summary(ModelBinAdd)
+
+print("Print ML -2LL, AIC, and BIC that match SAS")
+-2*logLik(ModelBinAdd); AIC(ModelBinAdd); BIC(ModelBinAdd)
+
+print("Pearson Chi-Square / DF Index of Fit matching SAS and STATA")
+sum(residuals(ModelBinAdd, type="pearson")^2)/(233)  # SAS N
+
+print("Multiv Wald test of model -- very close to SAS and STATA")
+BinAddR2 = glht(model=ModelBinAdd, linfct=c('basica=0','ciencia=0','historia=0','cuarto_nivel=0'))
+print(summary(BinAddR2, test=Chisqtest()), digits="8") # Joint chi-square test 
+
+print("Likelihood Ratio Test for Addition of Random Intercept Variance")
+DevTestA=-2*(logLik(ModelBin)-logLik(ModelBinAdd))
+RegPvalueA=pchisq((DevTestA), df=1, lower.tail=FALSE)
+MixPvalueA=RegPvalueA/2
+
+print("Test Statistic, Regular and Mixture P-values for DF=1") 
+DevTestA; RegPvalueA; MixPvalueA
+
+# Beta-Binomial (multiplicative over-dispersion)
+
+print("R Two-Predictor Binomial Model using vglm with Multiplicative Overdispersion")
+print("Parameter SEs do not match SAS and STATA exactly but are close")
+ModelBetaBin = vglm(data=data, betabinomial(lmu="logitlink", lrho="logitlink"), 
+                    formula=cbind(Buenas,Nincorrect)~1+basica+ciencia+historia+cuarto_nivel)
+
+summary(ModelBetaBin)
+
+print("Print ML -2LL, AIC, and BIC that match SAS")
+-2*logLik(ModelBetaBin); AIC(ModelBetaBin); BIC(ModelBetaBin)
+
+print("Pearson Chi-Square / DF Index of Fit matching SAS and STATA")
+sum(residuals(ModelBetaBin, type="pearson")^2)/(233)  # SAS N
+
+print("Multiv Wald test of model -- very close to SAS and STATA")
+BinAddR2 = glht(model=ModelBetaBin, linfct=c('basica=0','ciencia=0','historia=0','cuarto_nivel=0'))
+print(summary(BinAddR2, test=Chisqtest()), digits="8") # Joint chi-square test 
+
+print("Likelihood Ratio Test for Addition of Multiplicative Overdispersion")
+DevTestB=-2*(logLik(ModelBin)-logLik(ModelBetaBin))
+RegPvalueB=pchisq((DevTestB), df=1, lower.tail=FALSE)
+MixPvalueB=RegPvalueB/2
+
+print("Test Statistic, Regular and Mixture P-values for DF=1") 
+DevTestB; RegPvalueB; MixPvalueB
 ```
 
